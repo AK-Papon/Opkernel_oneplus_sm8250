@@ -2929,8 +2929,11 @@ static int get_swappiness(struct lruvec *lruvec, struct scan_control *sc)
 {
 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
 
-	if (mem_cgroup_get_nr_swap_pages(memcg) < MIN_LRU_BATCH)
+	if (mem_cgroup_get_nr_swap_pages(memcg) < MIN_LRU_BATCH) {
+		count_vm_event(current_is_kswapd() ? LRU_KSWAPD_SWAP_FULL:
+						     LRU_DIRECT_SWAP_FULL);
 		return 0;
+	}
 
 	return mem_cgroup_swappiness(memcg);
 }
@@ -4467,8 +4470,13 @@ static bool isolate_page(struct lruvec *lruvec, struct page *page, struct scan_c
 		return false;
 
 	if (!(sc->may_writepage && (sc->gfp_mask & __GFP_IO)) &&
-	    (PageDirty(page) || (PageAnon(page) && !PageSwapCache(page))))
+	    (PageDirty(page) || (PageAnon(page) && !PageSwapCache(page)))) {
+		if (!sc->may_writepage)
+			__count_vm_event(LRU_NO_WRITEPAGE);
+		if (!(sc->gfp_mask & __GFP_IO))
+			__count_vm_event(LRU_NO_GFP_IO);
 		return false;
+	}
 
 	if (!get_page_unless_zero(page))
 		return false;
@@ -4713,6 +4721,10 @@ static int evict_pages(struct lruvec *lruvec, struct scan_control *sc, int swapp
 	free_unref_page_list(&list);
 
 	sc->nr_reclaimed += reclaimed;
+	if (!reclaimed) {
+		item = current_is_kswapd() ? LRU_KSWAPD_ANON : LRU_DIRECT_ANON;
+		count_vm_event(item + type);
+	}
 
 	if (type == LRU_GEN_ANON && swapped)
 		*swapped = true;
@@ -4721,7 +4733,7 @@ static int evict_pages(struct lruvec *lruvec, struct scan_control *sc, int swapp
 }
 
 static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc, bool can_swap,
-			   unsigned long reclaimed, bool *need_aging)
+		unsigned long reclaimed, bool *need_aging)
 {
 	int priority;
 	long nr_to_scan;
@@ -4733,7 +4745,6 @@ static long get_nr_to_scan(struct lruvec *lruvec, struct scan_control *sc, bool 
 	if (!nr_to_scan)
 		return 0;
 
-	/* adjust priority if memcg is offline or the target is met */
 	if (!mem_cgroup_online(memcg))
 		priority = 0;
 	else if (sc->nr_reclaimed - reclaimed >= sc->nr_to_reclaim)
@@ -4770,8 +4781,6 @@ static void lru_gen_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc
 	bool swapped = false;
 	unsigned long reclaimed = sc->nr_reclaimed;
 	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
-
-	lru_add_drain();
 
 	blk_start_plug(&plug);
 
@@ -6735,8 +6744,11 @@ restart:
 			sc.priority--;
 	} while (sc.priority >= 1);
 
-	if (!sc.nr_reclaimed)
-		pgdat->kswapd_failures++;
+	if (!sc.nr_reclaimed) {
+		count_vm_event(LRU_KSWAPD_NO_PROGRESS);
+		if (!lru_gen_enabled())
+			pgdat->kswapd_failures++;
+	}
 
 out:
 	/* If reclaim was boosted, account for the reclaim done in this pass */
