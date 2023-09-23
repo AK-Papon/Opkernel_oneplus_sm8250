@@ -1283,9 +1283,8 @@ static void zram_free_page(struct zram *zram, size_t index)
 		atomic64_sub(zram_get_obj_size(zram, index),
 			     &zram->stats.compr_data_size);
 
-	atomic64_dec(&zram->stats.pages_stored);
-
 out:
+        atomic64_dec(&zram->stats.pages_stored);
 	zram_set_entry(zram, index, NULL);
 	zram_set_obj_size(zram, index, 0);
 	WARN_ON_ONCE(zram->table[index].flags &
@@ -1459,7 +1458,7 @@ compress_again:
 		atomic64_inc(&zram->stats.writestall);
 		entry = zram_entry_alloc(zram, comp_len,
 				GFP_NOIO | __GFP_HIGHMEM |
-				__GFP_MOVABLE | __GFP_CMA | GFP_ATOMIC | ___GFP_HIGH_ATOMIC_ZRAM);
+				__GFP_MOVABLE | __GFP_CMA);
 		if (entry)
 			goto compress_again;
 		return -ENOMEM;
